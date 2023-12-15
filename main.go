@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	mu         sync.Mutex
-	powerShell *exec.Cmd
+	mu          sync.Mutex
+	powerShell  *exec.Cmd
+	powerShellIn *chan string // canal pour écrire des commandes dans le processus pwsh
 )
 
 func main() {
@@ -32,32 +33,29 @@ func initializePowerShell() {
 			log.Fatal(err)
 		}
 
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		cmd.Stderr = nil // Vous pouvez rediriger la sortie d'erreur si nécessaire
+		go func() {
+			defer stdinPipe.Close()
+			for {
+				select {
+				case cmd := <-*powerShellIn:
+					_, err := fmt.Fprintln(stdinPipe, cmd)
+					if err != nil {
+						log.Printf("Error writing to PowerShell stdin: %v", err)
+					}
+				}
+			}
+		}()
 
 		if err := cmd.Start(); err != nil {
 			log.Fatal(err)
 		}
 
 		powerShell = cmd
-
-		// Fermer le stdinPipe et stdoutPipe lorsque le programme se termine
-		go func() {
-			_ = cmd.Wait()
-			stdinPipe.Close()
-			stdoutPipe.Close()
-		}()
+		powerShellIn = &chan string
 	}
 }
 
 func cleanupPowerShell() {
-	mu.Lock()
-	defer mu.Unlock()
-
 	if powerShell != nil {
 		powerShell.Wait()
 	}
@@ -74,42 +72,9 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	*powerShellIn <- script
 
-	if powerShell == nil || powerShell.ProcessState != nil && powerShell.ProcessState.Exited() {
-		http.Error(w, "PowerShell session closed", http.StatusInternalServerError)
-		return
-	}
+	// Vous pouvez également ajouter une logique pour récupérer la sortie du script PowerShell si nécessaire
 
-	stdin, err := powerShell.StdinPipe()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error obtaining PowerShell stdin: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer stdin.Close()
-
-	stdout, err := powerShell.StdoutPipe()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error obtaining PowerShell stdout: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer stdout.Close()
-
-	_, err = fmt.Fprint(stdin, script)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error writing to PowerShell stdin: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	output, err := io.ReadAll(stdout)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error reading from PowerShell stdout: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Envoyer le résultat du script dans la réponse HTTP
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusOK)
-	w.Write(output)
+	fmt.Fprint(w, "Script en cours d'exécution...")
 }
