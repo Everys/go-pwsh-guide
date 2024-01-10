@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 var server = "VotreServeurWinRM"
@@ -14,10 +15,35 @@ func runPowerShellScript() error {
 
 	cmd := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-server", server, "-command", command)
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Capturer la sortie standard
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 
-	return cmd.Run()
+	// Démarrer le processus
+	err = cmd.Start()
+	if err != nil {
+		return err
+	}
+
+	// Lire la sortie standard
+	output, err := io.ReadAll(stdout)
+	if err != nil {
+		return err
+	}
+
+	// Attendre la fin de l'exécution du processus
+	err = cmd.Wait()
+	if err != nil {
+		return err
+	}
+
+	// Afficher le résultat
+	fmt.Println("Résultat de la commande PowerShell :")
+	fmt.Println(string(output))
+
+	return nil
 }
 
 func main() {
